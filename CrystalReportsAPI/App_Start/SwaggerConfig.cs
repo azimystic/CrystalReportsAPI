@@ -62,10 +62,10 @@ namespace CrystalReportsAPI
                         //    .Description("Basic HTTP Authentication");
                         //
 						// NOTE: You must also configure 'EnableApiKeySupport' below in the SwaggerUI section
-                        //c.ApiKey("apiKey")
-                        //    .Description("API Key Authentication")
-                        //    .Name("apiKey")
-                        //    .In("header");
+                        c.ApiKey("X-API-Key")
+                            .Description("API Key Authentication")
+                            .Name("X-API-Key")
+                           .In("header");
                         //
                         //c.OAuth2("oauth2")
                         //    .Description("OAuth2 Implicit Grant")
@@ -182,7 +182,7 @@ namespace CrystalReportsAPI
                         // Use the "DocumentTitle" option to change the Document title.
                         // Very helpful when you have multiple Swagger pages open, to tell them apart.
                         //
-                        //c.DocumentTitle("My Swagger UI");
+                        c.DocumentTitle("Reports");
 
                         // Use the "InjectStylesheet" option to enrich the UI with one or more additional CSS stylesheets.
                         // The file must be included in your project as an "Embedded Resource", and then the resource's
@@ -248,7 +248,7 @@ namespace CrystalReportsAPI
                         // If your API supports ApiKey, you can override the default values.
                         // "apiKeyIn" can either be "query" or "header"
                         //
-                        //c.EnableApiKeySupport("apiKey", "header");
+                        c.EnableApiKeySupport("X-API-Key", "header");
                     });
         }
     }

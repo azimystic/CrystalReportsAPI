@@ -15,10 +15,9 @@ namespace CrystalReportsAPI
         {
             AreaRegistration.RegisterAllAreas();
             GlobalConfiguration.Configure(WebApiConfig.Register);
-            
-            // Register Swagger configuration
-            SwaggerConfig.Register(GlobalConfiguration.Configuration);
-            
+
+        
+
             FilterConfig.RegisterGlobalFilters(GlobalFilters.Filters);
             RouteConfig.RegisterRoutes(RouteTable.Routes);
             BundleConfig.RegisterBundles(BundleTable.Bundles);

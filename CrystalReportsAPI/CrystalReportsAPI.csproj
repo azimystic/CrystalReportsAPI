@@ -102,6 +102,9 @@
       <HintPath>..\packages\log4net.2.0.12\lib\net45\log4net.dll</HintPath>
     </Reference>
     <Reference Include="Microsoft.CSharp" />
+    <Reference Include="Swashbuckle.Core, Version=1.0.0.0, Culture=neutral, PublicKeyToken=cd1bb07a5ac7c7bc, processorArchitecture=MSIL">
+      <HintPath>..\packages\Swashbuckle.Core.5.6.0\lib\net40\Swashbuckle.Core.dll</HintPath>
+    </Reference>
     <Reference Include="System" />
     <Reference Include="System.Data" />
     <Reference Include="System.Drawing" />
@@ -174,9 +177,6 @@
     <Reference Include="Antlr3.Runtime">
       <Private>True</Private>
       <HintPath>..\packages\Antlr.3.5.0.2\lib\Antlr3.Runtime.dll</HintPath>
-    </Reference>
-    <Reference Include="CrystalDecisions.ReportSource">
-      <Private>True</Private>
     </Reference>
   </ItemGroup>
   <ItemGroup>
