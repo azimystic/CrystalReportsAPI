@@ -180,8 +180,6 @@ namespace CrystalReportsAPI.Controllers
         /// </summary>
         private void ApplyParameters(ReportDocument reportDocument, ReportRequest request)
         {
-            ParameterFieldDefinitions parameterFields = reportDocument.DataDefinition.ParameterFields;
-
             foreach (var param in request.Parameters)
             {
                 if (!string.IsNullOrEmpty(param.Name))
