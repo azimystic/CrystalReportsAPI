@@ -106,9 +106,12 @@ namespace CrystalReportsAPI.Controllers
             }
             catch (Exception ex)
             {
+                // Log the full exception details server-side (implement proper logging as needed)
+                System.Diagnostics.Debug.WriteLine($"Report generation error: {ex}");
+                
                 return Request.CreateErrorResponse(
                     HttpStatusCode.InternalServerError,
-                    $"Error generating report: {ex.Message}");
+                    "An error occurred while generating the report. Please contact support if the issue persists.");
             }
             finally
             {
@@ -139,10 +142,15 @@ namespace CrystalReportsAPI.Controllers
             {
                 ServerName = builder.DataSource,
                 DatabaseName = builder.InitialCatalog,
-                UserID = builder.UserID,
-                Password = builder.Password,
                 IntegratedSecurity = builder.IntegratedSecurity
             };
+
+            // Only set UserID and Password when not using integrated security
+            if (!builder.IntegratedSecurity)
+            {
+                connectionInfo.UserID = builder.UserID;
+                connectionInfo.Password = builder.Password;
+            }
 
             // Apply connection info to all tables in the main report
             ApplyConnectionToTables(reportDocument.Database.Tables, connectionInfo);
