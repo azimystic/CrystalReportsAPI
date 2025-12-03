@@ -258,7 +258,7 @@ namespace CrystalReportsAPI.Controllers
         private string GetReportPath(ReportRequest request)
         {
 
-            string reportsFolder = "C:\\Users\\cmaag\\source\\repos\\NomiButtVp\\Standard_Hospital\\GL\\Reports";
+            string reportsFolder = HttpContext.Current.Server.MapPath("~/Reports/");
             string reportFileName;
 
             if (request.ReportName == "TestResultQ")
