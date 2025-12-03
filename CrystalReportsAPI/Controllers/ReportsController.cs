@@ -45,18 +45,20 @@ namespace CrystalReportsAPI.Controllers
 
             // Sanitize the report name to prevent path traversal
             // Support subdirectories (e.g., "LabRadiology/rptLabTestUiltraSound_1")
-            string reportName = request.ReportName.Replace('\\', '/'); // Normalize path separators
             
-            // Validate that the path doesn't contain suspicious patterns
-            if (reportName.Contains("..") || 
-                reportName.StartsWith("/") || 
-                reportName.StartsWith("\\") ||
-                reportName.Contains(":"))
+            // Validate that the path doesn't contain suspicious patterns (before normalization)
+            if (request.ReportName.Contains("..") || 
+                request.ReportName.Contains(":") ||
+                request.ReportName.StartsWith("/") || 
+                request.ReportName.StartsWith("\\"))
             {
                 return Request.CreateErrorResponse(
                     HttpStatusCode.BadRequest,
                     "Invalid report name: path traversal not allowed.");
             }
+            
+            // Normalize path separators after validation
+            string reportName = request.ReportName.Replace('\\', '/');
 
             // Split into directory and file parts
             string[] pathParts = reportName.Split('/');
@@ -96,7 +98,7 @@ namespace CrystalReportsAPI.Controllers
             {
                 return Request.CreateErrorResponse(
                     HttpStatusCode.NotFound,
-                    $"Report '{reportName}' was not found at path: {fullReportPath}");
+                    $"Report '{reportName}' was not found.");
             }
 
             ReportDocument reportDocument = null;
@@ -137,7 +139,7 @@ namespace CrystalReportsAPI.Controllers
                 response.Content.Headers.ContentType = new MediaTypeHeaderValue("application/pdf");
                 
                 // Use the last part of the report name (file name without path) for the PDF filename
-                string pdfFileName = Path.GetFileNameWithoutExtension(reportName) + ".pdf";
+                string pdfFileName = Path.GetFileNameWithoutExtension(Path.GetFileName(reportName)) + ".pdf";
                 response.Content.Headers.ContentDisposition = new ContentDispositionHeaderValue("inline")
                 {
                     FileName = pdfFileName
@@ -149,14 +151,16 @@ namespace CrystalReportsAPI.Controllers
             {
                 // Log the full exception details server-side (implement proper logging as needed)
                 System.Diagnostics.Debug.WriteLine($"Report generation error: {ex}");
+                System.Diagnostics.Debug.WriteLine($"Report Path: {fullReportPath}");
+                System.Diagnostics.Debug.WriteLine($"Is64BitProcess: {Environment.Is64BitProcess}");
                 
-                // Build detailed error message for debugging
+                // Build error message for client (don't expose full file system paths)
                 string errorMessage = $"Crystal Reports error: {ex.Message}";
                 if (ex.InnerException != null)
                 {
                     errorMessage += $" Inner: {ex.InnerException.Message}";
                 }
-                errorMessage += $" Report Path: {fullReportPath}";
+                errorMessage += $" Report: {reportName}";
                 errorMessage += $" Is64BitProcess: {Environment.Is64BitProcess}";
                 
                 return Request.CreateErrorResponse(
