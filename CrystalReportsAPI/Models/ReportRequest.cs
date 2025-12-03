@@ -10,8 +10,10 @@ namespace CrystalReportsAPI.Models
     {
         /// <summary>
         /// The name of the report file (without extension). 
-        /// The report file should be located in the ~/Reports/ folder.
-        /// Example: "Invoice" for Invoice.rpt
+        /// The report file should be located in the ~/Reports/ folder or a subdirectory.
+        /// Supports subdirectories using forward slashes.
+        /// Example: "Invoice" for Reports/Invoice.rpt
+        /// Example: "LabRadiology/rptLabTestUiltraSound_1" for Reports/LabRadiology/rptLabTestUiltraSound_1.rpt
         /// </summary>
         [Required]
         public string ReportName { get; set; }

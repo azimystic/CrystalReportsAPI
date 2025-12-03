@@ -44,32 +44,70 @@ namespace CrystalReportsAPI.Controllers
             }
 
             // Sanitize the report name to prevent path traversal
-            string sanitizedReportName = Path.GetFileNameWithoutExtension(request.ReportName);
-            if (string.IsNullOrEmpty(sanitizedReportName) || 
-                sanitizedReportName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+            // Support subdirectories (e.g., "LabRadiology/rptLabTestUiltraSound_1")
+            string reportName = request.ReportName.Replace('\\', '/'); // Normalize path separators
+            
+            // Validate that the path doesn't contain suspicious patterns
+            if (reportName.Contains("..") || 
+                reportName.StartsWith("/") || 
+                reportName.StartsWith("\\") ||
+                reportName.Contains(":"))
             {
                 return Request.CreateErrorResponse(
                     HttpStatusCode.BadRequest,
-                    "Invalid report name.");
+                    "Invalid report name: path traversal not allowed.");
+            }
+
+            // Split into directory and file parts
+            string[] pathParts = reportName.Split('/');
+            foreach (string part in pathParts)
+            {
+                if (string.IsNullOrWhiteSpace(part) || 
+                    part.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+                {
+                    return Request.CreateErrorResponse(
+                        HttpStatusCode.BadRequest,
+                        "Invalid report name: contains invalid characters.");
+                }
             }
 
             // Construct the report file path
             string reportsFolder = HttpContext.Current.Server.MapPath("~/Reports/");
-            string reportPath = Path.Combine(reportsFolder, sanitizedReportName + ".rpt");
+            string reportPath = Path.Combine(reportsFolder, reportName.TrimEnd('/'));
+            
+            // Add .rpt extension if not already present
+            if (!reportPath.EndsWith(".rpt", StringComparison.OrdinalIgnoreCase))
+            {
+                reportPath += ".rpt";
+            }
+
+            // Ensure the resolved path is still within the Reports folder (security check)
+            string fullReportPath = Path.GetFullPath(reportPath);
+            string fullReportsFolder = Path.GetFullPath(reportsFolder);
+            if (!fullReportPath.StartsWith(fullReportsFolder, StringComparison.OrdinalIgnoreCase))
+            {
+                return Request.CreateErrorResponse(
+                    HttpStatusCode.BadRequest,
+                    "Invalid report name: path must be within Reports folder.");
+            }
 
             // Verify the file exists
-            if (!File.Exists(reportPath))
+            if (!File.Exists(fullReportPath))
             {
                 return Request.CreateErrorResponse(
                     HttpStatusCode.NotFound,
-                    $"Report '{sanitizedReportName}' was not found.");
+                    $"Report '{reportName}' was not found at path: {fullReportPath}");
             }
 
             ReportDocument reportDocument = null;
             try
             {
                 reportDocument = new ReportDocument();
-                reportDocument.Load(reportPath);
+                reportDocument.Load(fullReportPath);
+                
+                // Verify database to ensure report is properly initialized
+                // This helps prevent "The document has not been opened" errors
+                reportDocument.VerifyDatabase();
 
                 // Apply database connection
                 ApplyDatabaseConnection(reportDocument);
@@ -97,9 +135,12 @@ namespace CrystalReportsAPI.Controllers
                     Content = new ByteArrayContent(pdfBytes)
                 };
                 response.Content.Headers.ContentType = new MediaTypeHeaderValue("application/pdf");
+                
+                // Use the last part of the report name (file name without path) for the PDF filename
+                string pdfFileName = Path.GetFileNameWithoutExtension(reportName) + ".pdf";
                 response.Content.Headers.ContentDisposition = new ContentDispositionHeaderValue("inline")
                 {
-                    FileName = $"{sanitizedReportName}.pdf"
+                    FileName = pdfFileName
                 };
 
                 return response;
@@ -109,9 +150,18 @@ namespace CrystalReportsAPI.Controllers
                 // Log the full exception details server-side (implement proper logging as needed)
                 System.Diagnostics.Debug.WriteLine($"Report generation error: {ex}");
                 
+                // Build detailed error message for debugging
+                string errorMessage = $"Crystal Reports error: {ex.Message}";
+                if (ex.InnerException != null)
+                {
+                    errorMessage += $" Inner: {ex.InnerException.Message}";
+                }
+                errorMessage += $" Report Path: {fullReportPath}";
+                errorMessage += $" Is64BitProcess: {Environment.Is64BitProcess}";
+                
                 return Request.CreateErrorResponse(
                     HttpStatusCode.InternalServerError,
-                    "An error occurred while generating the report. Please contact support if the issue persists.");
+                    errorMessage);
             }
             finally
             {
