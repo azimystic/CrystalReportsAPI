@@ -10,6 +10,13 @@ namespace CrystalReportsAPI
         public static void Register(HttpConfiguration config)
         {
             // Web API configuration and services
+            
+            // Remove XML formatter to avoid conflicts
+            config.Formatters.Remove(config.Formatters.XmlFormatter);
+            
+            // Ensure JSON formatter doesn't interfere with ByteArrayContent
+            var jsonFormatter = config.Formatters.JsonFormatter;
+            jsonFormatter.SupportedMediaTypes.Add(new System.Net.Http.Headers.MediaTypeHeaderValue("text/html"));
 
             // Web API routes
             config.MapHttpAttributeRoutes();

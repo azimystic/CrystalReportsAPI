@@ -123,6 +123,32 @@ namespace CrystalReportsAPI.Controllers
         }
 
         /// <summary>
+        /// Test endpoint to verify binary file download works
+        /// </summary>
+        [HttpGet]
+        [Route("test-pdf")]
+        public HttpResponseMessage TestPdf()
+        {
+            // Create a simple PDF byte array (PDF header)
+            byte[] pdfBytes = new byte[] { 0x25, 0x50, 0x44, 0x46, 0x2D, 0x31, 0x2E, 0x34 }; // %PDF-1.4
+            
+            System.Diagnostics.Debug.WriteLine($"Test PDF - Bytes: {pdfBytes.Length}");
+            
+            var response = new HttpResponseMessage(HttpStatusCode.OK);
+            var content = new ByteArrayContent(pdfBytes);
+            
+            content.Headers.ContentType = new MediaTypeHeaderValue("application/pdf");
+            content.Headers.ContentDisposition = new ContentDispositionHeaderValue("attachment")
+            {
+                FileName = "test.pdf"
+            };
+            content.Headers.ContentLength = pdfBytes.Length;
+            
+            response.Content = content;
+            return response;
+        }
+
+        /// <summary>
         /// Generates a Crystal Report and returns it as a PDF. 
         /// </summary>
         [HttpPost]
@@ -139,6 +165,7 @@ namespace CrystalReportsAPI.Controllers
 
             ReportDocument reportDocument = null;
             string reportPath = string.Empty;
+            string tempFilePath = string.Empty;
 
             try
             {
@@ -161,61 +188,121 @@ namespace CrystalReportsAPI.Controllers
                 reportDocument = new ReportDocument();
                 reportDocument.Load(reportPath, OpenReportMethod.OpenReportByTempCopy);
 
+                System.Diagnostics.Debug.WriteLine($"Report loaded: {reportPath}");
+                System.Diagnostics.Debug.WriteLine($"Report name: {reportDocument.Name}");
+
                 // Set report title if provided
                 if (!string.IsNullOrEmpty(request.ReportTitle))
                 {
                     reportDocument.SummaryInfo.ReportTitle = request.ReportTitle;
                 }
 
-                // Apply database connection BEFORE setting parameters
-                ApplyDatabaseConnection(reportDocument);
-
-                // Apply parameters based on report type
+                // Apply parameters BEFORE database connection (like in working code)
                 ApplyReportParameters(reportDocument, request);
+                
+                // Apply database connection AFTER setting parameters
+                ApplyDatabaseConnection(reportDocument);
+                System.Diagnostics.Debug.WriteLine("Database connection applied");
+                
+                // Check if report has records
+                try
+                {
+                    bool hasRecords = reportDocument.HasRecords;
+                    System.Diagnostics.Debug.WriteLine($"Report HasRecords: {hasRecords}");
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Could not check HasRecords: {ex.Message}");
+                }
 
                 // Export to PDF or Excel
                 byte[] exportBytes;
                 string contentType;
                 string fileExtension;
+                tempFilePath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
 
                 if (request.ExportToExcel)
                 {
-                    using (var stream = reportDocument.ExportToStream(ExportFormatType.Excel))
-                    {
-                        using (var memoryStream = new MemoryStream())
-                        {
-                            stream.CopyTo(memoryStream);
-                            exportBytes = memoryStream.ToArray();
-                        }
-                    }
+                    tempFilePath += ".xls";
+                    reportDocument.ExportToDisk(ExportFormatType.Excel, tempFilePath);
                     contentType = "application/vnd.ms-excel";
                     fileExtension = ".xls";
                 }
                 else
                 {
-                    using (var stream = reportDocument.ExportToStream(ExportFormatType.PortableDocFormat))
-                    {
-                        using (var memoryStream = new MemoryStream())
-                        {
-                            stream.CopyTo(memoryStream);
-                            exportBytes = memoryStream.ToArray();
-                        }
-                    }
+                    tempFilePath += ".pdf";
+                    reportDocument.ExportToDisk(ExportFormatType.PortableDocFormat, tempFilePath);
                     contentType = "application/pdf";
                     fileExtension = ".pdf";
                 }
-
-                // Create the response
-                var response = new HttpResponseMessage(HttpStatusCode.OK)
+                
+                System.Diagnostics.Debug.WriteLine($"File exported to: {tempFilePath}");
+                System.Diagnostics.Debug.WriteLine($"File exists: {File.Exists(tempFilePath)}");
+                
+                // Close report document to release locks
+                if (reportDocument != null)
                 {
-                    Content = new ByteArrayContent(exportBytes)
-                };
-                response.Content.Headers.ContentType = new MediaTypeHeaderValue(contentType);
-                response.Content.Headers.ContentDisposition = new ContentDispositionHeaderValue("inline")
+                    reportDocument.Close();
+                    reportDocument.Dispose();
+                    reportDocument = null;
+                }
+                
+                // Read the file - ensure it exists and has content
+                if (!File.Exists(tempFilePath))
+                {
+                    throw new FileNotFoundException($"Exported file not found: {tempFilePath}");
+                }
+                
+                var fileInfo = new FileInfo(tempFilePath);
+                System.Diagnostics.Debug.WriteLine($"File size: {fileInfo.Length} bytes");
+                
+                if (fileInfo.Length == 0)
+                {
+                    throw new InvalidOperationException("Exported file is empty (0 bytes)");
+                }
+                
+                exportBytes = File.ReadAllBytes(tempFilePath);
+                System.Diagnostics.Debug.WriteLine($"Bytes read into memory: {exportBytes.Length}");
+                
+                // Delete temp file NOW, before creating response
+                try
+                {
+                    File.Delete(tempFilePath);
+                    System.Diagnostics.Debug.WriteLine($"Temp file deleted: {tempFilePath}");
+                    tempFilePath = string.Empty; // Clear so finally block doesn't try again
+                }
+                catch (Exception delEx)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Warning: Could not delete temp file: {delEx.Message}");
+                }
+
+                // Create the response with bytes already in memory
+                System.Diagnostics.Debug.WriteLine($"Creating response with {exportBytes.Length} bytes");
+                System.Diagnostics.Debug.WriteLine($"Content-Type: {contentType}");
+                
+                // Log first few bytes for debugging
+                if (exportBytes.Length >= 10)
+                {
+                    var firstBytes = new byte[10];
+                    Array.Copy(exportBytes, firstBytes, 10);
+                    System.Diagnostics.Debug.WriteLine($"First 10 bytes: {string.Join(",", firstBytes)}");
+                }
+                
+                var response = new HttpResponseMessage(HttpStatusCode.OK);
+                var content = new ByteArrayContent(exportBytes);
+                
+                content.Headers.ContentType = new MediaTypeHeaderValue(contentType);
+                content.Headers.ContentDisposition = new ContentDispositionHeaderValue("attachment")
                 {
                     FileName = $"{request.ReportName}{fileExtension}"
                 };
+                content.Headers.ContentLength = exportBytes.Length;
+                
+                response.Content = content;
 
+                System.Diagnostics.Debug.WriteLine($"Response created successfully with Content-Length: {exportBytes.Length}");
+                System.Diagnostics.Debug.WriteLine($"Content-Disposition: {content.Headers.ContentDisposition}");
+                
                 return response;
             }
             catch (CrystalDecisions.Shared.CrystalReportsException crEx)
@@ -244,12 +331,31 @@ namespace CrystalReportsAPI.Controllers
             }
             finally
             {
+                // Clean up report document if not already disposed
                 if (reportDocument != null)
                 {
-                    reportDocument.Close();
-                    reportDocument.Dispose();
+                    try
+                    {
+                        reportDocument.Close();
+                        reportDocument.Dispose();
+                    }
+                    catch { }
                 }
-
+                
+                // Clean up temp file if it still exists
+                if (!string.IsNullOrEmpty(tempFilePath) && File.Exists(tempFilePath))
+                {
+                    try
+                    {
+                        File.Delete(tempFilePath);
+                        System.Diagnostics.Debug.WriteLine($"Temp file deleted in finally: {tempFilePath}");
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Failed to delete temp file in finally: {ex.Message}");
+                    }
+                }
+                
                 GC.Collect();
                 GC.WaitForPendingFinalizers();
             }
@@ -274,7 +380,7 @@ namespace CrystalReportsAPI.Controllers
                         reportFileName = "rptLabTestResultQ_3.rpt";
                         break;
                     case 4:
-                        reportFileName = "rptLabTestResultQ. rpt";
+                        reportFileName = "rptLabTestResultQ.rpt";
                         break;
                     case 5:
                         reportFileName = "rptLabTestResultQ_6.rpt";
@@ -292,16 +398,16 @@ namespace CrystalReportsAPI.Controllers
                         reportFileName = "rptLabTestResultQ_8.rpt";
                         break;
                     case 10:
-                        reportFileName = "rptLabTestBloodBankResultQ. rpt";
+                        reportFileName = "rptLabTestBloodBankResultQ.rpt";
                         break;
                     case 11:
-                        reportFileName = "rptLabTestResultQ_Fixed_Patient_Value. rpt";
+                        reportFileName = "rptLabTestResultQ_Fixed_Patient_Value.rpt";
                         break;
                     case 12:
-                        reportFileName = "rptLabTestHistopathology. rpt";
+                        reportFileName = "rptLabTestHistopathology.rpt";
                         break;
                     default:
-                        reportFileName = "rptLabTestResultQ. rpt";
+                        reportFileName = "rptLabTestResultQ.rpt";
                         break;
                 }
 
@@ -349,23 +455,51 @@ namespace CrystalReportsAPI.Controllers
 
         private void ApplyTestResultQParameters(ReportDocument reportDocument, ReportRequest request)
         {
+            System.Diagnostics.Debug.WriteLine($"=== Setting Report Parameters ===");
+            System.Diagnostics.Debug.WriteLine($"ReportColumn: {request.ReportColumn}");
+            
             if (!string.IsNullOrEmpty(request.TestIDs))
             {
+                System.Diagnostics.Debug.WriteLine($"Setting @Test_IDs: {request.TestIDs}");
                 reportDocument.SetParameterValue("@Test_IDs", request.TestIDs);
             }
 
-            if (!string.IsNullOrEmpty(request.PatientID))
+            string testWiseIds = string.Empty;
+            if (request.Parameters != null)
             {
+                System.Diagnostics.Debug.WriteLine($"Parameters count: {request.Parameters.Count}");
+                var testWiseIdsParam = request.Parameters.Find(p => p.Name == "test_wise_ids");
+                if (testWiseIdsParam != null && testWiseIdsParam.Value != null)
+                {
+                    testWiseIds = testWiseIdsParam.Value.ToString();
+                    System.Diagnostics.Debug.WriteLine($"Found test_wise_ids: {testWiseIds}");
+                }
+            }
+            
+            if (!string.IsNullOrEmpty(testWiseIds))
+            {
+                System.Diagnostics.Debug.WriteLine($"Setting @Patient_ID from test_wise_ids: {testWiseIds}");
+                reportDocument.SetParameterValue("@Patient_ID", testWiseIds);
+            }
+            else if (!string.IsNullOrEmpty(request.PatientID))
+            {
+                System.Diagnostics.Debug.WriteLine($"Setting @Patient_ID from PatientID: {request.PatientID}");
                 reportDocument.SetParameterValue("@Patient_ID", request.PatientID);
+            }
+            else
+            {
+                System.Diagnostics.Debug.WriteLine("WARNING: @Patient_ID not set - no value provided");
             }
 
             if (!string.IsNullOrEmpty(request.TransID))
             {
+                System.Diagnostics.Debug.WriteLine($"Setting @Trans_IDs: {request.TransID}");
                 reportDocument.SetParameterValue("@Trans_IDs", request.TransID);
             }
 
             if (!string.IsNullOrEmpty(request.BillDetailID))
             {
+                System.Diagnostics.Debug.WriteLine($"Setting @Bill_Details_IDs: {request.BillDetailID}");
                 reportDocument.SetParameterValue("@Bill_Details_IDs", request.BillDetailID);
             }
 
@@ -373,6 +507,7 @@ namespace CrystalReportsAPI.Controllers
             string companyAddress = ConfigurationManager.AppSettings["CompanyAddress"] ?? "";
             string companyPhone = ConfigurationManager.AppSettings["CompanyPhone"] ?? "";
 
+            System.Diagnostics.Debug.WriteLine($"Setting CompanyName: {companyName}");
             reportDocument.SetParameterValue("CompanyName", companyName);
             reportDocument.SetParameterValue("Address", companyAddress);
             reportDocument.SetParameterValue("Phone", companyPhone);
@@ -384,6 +519,7 @@ namespace CrystalReportsAPI.Controllers
                 {
                     labTestDetailId = "1";
                 }
+                System.Diagnostics.Debug.WriteLine($"Setting @labTDetailsID: {labTestDetailId}");
                 reportDocument.SetParameterValue("@labTDetailsID", labTestDetailId);
             }
 
@@ -391,10 +527,16 @@ namespace CrystalReportsAPI.Controllers
             {
                 try
                 {
+                    System.Diagnostics.Debug.WriteLine("Setting ChkLetterHead: true");
                     reportDocument.SetParameterValue("ChkLetterHead", true);
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Failed to set ChkLetterHead: {ex.Message}");
+                }
             }
+            
+            System.Diagnostics.Debug.WriteLine("=== Parameter setting complete ===");
         }
 
         private void ApplyDatabaseConnection(ReportDocument reportDocument)

@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Crystal Reports API Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            background-color: #f9f9f9;
+        }
+        .error {
+            background-color: #ffe6e6;
+            border-color: #ff0000;
+        }
+        .success {
+            background-color: #e6ffe6;
+            border-color: #00ff00;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+    </style>
+</head>
+<body>
+    <h1>Crystal Reports API Download Test</h1>
+    
+    <button onclick="downloadReport()">Download Test Report</button>
+    
+    <div id="result"></div>
+
+    <script>
+        async function downloadReport() {
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = 'Requesting report...';
+            resultDiv.className = 'result';
+            
+            const requestData = {
+                "ReportName": "TestResultQ",
+                "ReportTitle": "Department Of Pathalogy",
+                "ReportColumn": 8,
+                "TestIDs": "152",
+                "PatientID": "",
+                "TransID": "3",
+                "BillDetailID": "1813",
+                "LabTestDetailID": "2",
+                "IncludeLetterhead": true,
+                "ExportToExcel": false,
+                "Parameters": [
+                    {
+                        "Name": "test_wise_ids",
+                        "Value": "3203"
+                    }
+                ]
+            };
+
+            try {
+                const response = await fetch('http://173.234.137.51:6915/api/reports/generate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-API-Key': '12345'
+                    },
+                    body: JSON.stringify(requestData)
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`HTTP ${response.status}: ${errorText}`);
+                }
+
+                // Get the content type and length
+                const contentType = response.headers.get('content-type');
+                const contentLength = response.headers.get('content-length');
+                const contentDisposition = response.headers.get('content-disposition');
+                
+                resultDiv.innerHTML = `
+                    <strong>Response Headers:</strong><br>
+                    Content-Type: ${contentType}<br>
+                    Content-Length: ${contentLength} bytes<br>
+                    Content-Disposition: ${contentDisposition}<br>
+                    <br>
+                    Downloading file...
+                `;
+
+                // Get the blob
+                const blob = await response.blob();
+                
+                resultDiv.innerHTML += `<br>Blob size: ${blob.size} bytes<br>`;
+                
+                if (blob.size === 0) {
+                    throw new Error('Downloaded file is empty (0 bytes)!');
+                }
+
+                // Create download link
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'TestResultQ.pdf';
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+
+                resultDiv.className = 'result success';
+                resultDiv.innerHTML += '<br><strong>? Download successful!</strong>';
+
+            } catch (error) {
+                resultDiv.className = 'result error';
+                resultDiv.innerHTML = `<strong>Error:</strong><br>${error.message}`;
+                console.error('Download error:', error);
+            }
+        }
+    </script>
+</body>
+</html>
