@@ -1,15 +1,16 @@
+using CrystalDecisions.CrystalReports.Engine;
+using CrystalDecisions.Shared;
+using CrystalReportsAPI.Filters;
+using CrystalReportsAPI.Models;
 using System;
 using System.Configuration;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Web;
 using System.Web.Http;
-using CrystalDecisions.Shared;
-using CrystalDecisions.CrystalReports.Engine;
-using CrystalReportsAPI.Filters;
-using CrystalReportsAPI.Models;
 
 namespace CrystalReportsAPI.Controllers
 {
@@ -186,10 +187,15 @@ namespace CrystalReportsAPI.Controllers
 
                 // Create and load the report document
                 reportDocument = new ReportDocument();
+                
+                System.Diagnostics.Debug.WriteLine($"Loading report from: {reportPath}");
+                System.Diagnostics.Debug.WriteLine($"Report file size: {new FileInfo(reportPath).Length} bytes");
+                
                 reportDocument.Load(reportPath, OpenReportMethod.OpenReportByTempCopy);
 
                 System.Diagnostics.Debug.WriteLine($"Report loaded: {reportPath}");
                 System.Diagnostics.Debug.WriteLine($"Report name: {reportDocument.Name}");
+                System.Diagnostics.Debug.WriteLine($"Report RecordSelectionFormula: {reportDocument.RecordSelectionFormula}");
 
                 // Set report title if provided
                 if (!string.IsNullOrEmpty(request.ReportTitle))
@@ -204,34 +210,207 @@ namespace CrystalReportsAPI.Controllers
                 ApplyDatabaseConnection(reportDocument);
                 System.Diagnostics.Debug.WriteLine("Database connection applied");
                 
-                // Check if report has records
+                // Log report sections and objects for resource debugging
+                System.Diagnostics.Debug.WriteLine("=== Report Structure Diagnostics ===");
                 try
                 {
-                    bool hasRecords = reportDocument.HasRecords;
-                    System.Diagnostics.Debug.WriteLine($"Report HasRecords: {hasRecords}");
+                    System.Diagnostics.Debug.WriteLine($"Report Sections: {reportDocument.ReportDefinition.Sections.Count}");
+                    foreach (Section section in reportDocument.ReportDefinition.Sections)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"  Section: {section.Name}, ReportObjects: {section.ReportObjects.Count}");
+                        foreach (ReportObject obj in section.ReportObjects)
+                        {
+                            if (obj.Kind == ReportObjectKind.PictureObject)
+                            {
+                                var picObj = (PictureObject)obj;
+                                System.Diagnostics.Debug.WriteLine($"    Picture: {picObj.Name}, ObjectFormat.EnableSuppress: {picObj.ObjectFormat.EnableSuppress}");
+                            }
+                        }
+                    }
                 }
-                catch (Exception ex)
+                catch (Exception structEx)
                 {
-                    System.Diagnostics.Debug.WriteLine($"Could not check HasRecords: {ex.Message}");
+                    System.Diagnostics.Debug.WriteLine($"Structure diagnostics failed: {structEx.Message}");
                 }
+                System.Diagnostics.Debug.WriteLine("=== End Report Structure Diagnostics ===");
+                
+                // For OutPatient report, re-apply CompanyName and CompanyLogo after database connection
+                // because ApplyDatabaseConnection can refresh the report and clear some parameters
+                if (request.ReportName == "OutPatient")
+                {
+                    System.Diagnostics.Debug.WriteLine("=== Re-applying Company parameters after DB connection ===");
+                    string companyName = ConfigurationManager.AppSettings["CompanyName"] ?? "Hospital Name";
+                    string logoPath = GetCompanyLogoPath();
+                    
+                    try
+                    {
+                        reportDocument.SetParameterValue("CompanyName", companyName);
+                        System.Diagnostics.Debug.WriteLine($"CompanyName re-set to: '{companyName}'");
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Failed to re-set CompanyName: {ex.Message}");
+                    }
+                    
+                    try
+                    {
+                        reportDocument.SetParameterValue("CompanyLogo", logoPath ?? string.Empty);
+                        System.Diagnostics.Debug.WriteLine($"CompanyLogo re-set to: '{logoPath}'");
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Failed to re-set CompanyLogo: {ex.Message}");
+                    }
+                    // Log the final record selection formula after all parameters are set
+                    System.Diagnostics.Debug.WriteLine($"=== Final Report State ===");
+                    System.Diagnostics.Debug.WriteLine($"RecordSelectionFormula: {reportDocument.RecordSelectionFormula}");
+                    var outPatientParam = request.Parameters.FirstOrDefault(p => p.Name == "outPatientID");
+                    // Try to log parameter field values
+                    try
+                    {
+                        int outPatientID = Convert.ToInt32(outPatientParam.Value);
+                        reportDocument.SetParameterValue("@outPatient", Convert.ToInt32(outPatientID));
+                        reportDocument.SetParameterValue("@outPatient", Convert.ToInt32(outPatientID), reportDocument.Subreports[0].Name.ToString());
+                        reportDocument.SetParameterValue("@outPatient", Convert.ToInt32(outPatientID), reportDocument.Subreports[1].Name.ToString());
+                        reportDocument.SetParameterValue("@outPatient", Convert.ToInt32(outPatientID), reportDocument.Subreports[2].Name.ToString());
+                        reportDocument.SetParameterValue("@outPatient", Convert.ToInt32(outPatientID), reportDocument.Subreports[3].Name.ToString());
+                    }
+                    catch (Exception paramEx)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Could not enumerate parameters: {paramEx.Message}");
+                    }
+                }
+                
+                
+                
+                // Note: Skipping HasRecords check as it can cause "Missing parameter values" error
+                // if any subreport parameters are not fully resolved yet
 
                 // Export to PDF or Excel
                 byte[] exportBytes;
                 string contentType;
                 string fileExtension;
-                tempFilePath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+                
+                // Ensure temp directory exists and create valid temp file path
+                string tempDir = Path.GetTempPath();
+                if (!Directory.Exists(tempDir))
+                {
+                    throw new InvalidOperationException($"Temp directory does not exist: {tempDir}");
+                }
+                
+                tempFilePath = Path.Combine(tempDir, Guid.NewGuid().ToString());
+                System.Diagnostics.Debug.WriteLine($"Temp directory: {tempDir}");
+                System.Diagnostics.Debug.WriteLine($"Temp file path (without extension): {tempFilePath}");
 
                 if (request.ExportToExcel)
                 {
                     tempFilePath += ".xls";
-                    reportDocument.ExportToDisk(ExportFormatType.Excel, tempFilePath);
+                    System.Diagnostics.Debug.WriteLine($"Exporting to Excel: {tempFilePath}");
+                    
+                    try
+                    {
+                        reportDocument.ExportToDisk(ExportFormatType.Excel, tempFilePath);
+                    }
+                    catch (Exception exportEx)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"ExportToDisk (Excel) failed: {exportEx.Message}");
+                        
+                        // Try alternative temp location in app folder
+                        string appTempDir = HttpContext.Current.Server.MapPath("~/App_Data/Temp");
+                        if (!Directory.Exists(appTempDir))
+                        {
+                            Directory.CreateDirectory(appTempDir);
+                        }
+                        
+                        tempFilePath = Path.Combine(appTempDir, Guid.NewGuid().ToString() + ".xls");
+                        System.Diagnostics.Debug.WriteLine($"Retrying Excel export with alternative path: {tempFilePath}");
+                        
+                        try
+                        {
+                            reportDocument.ExportToDisk(ExportFormatType.Excel, tempFilePath);
+                            System.Diagnostics.Debug.WriteLine("Excel export successful with alternative path");
+                        }
+                        catch (Exception retryEx)
+                        {
+                            throw new InvalidOperationException(
+                                $"Failed to export Excel report. Original error: {exportEx.Message}. " +
+                                $"Retry error: {retryEx.Message}", 
+                                exportEx);
+                        }
+                    }
+                    
                     contentType = "application/vnd.ms-excel";
                     fileExtension = ".xls";
                 }
                 else
                 {
                     tempFilePath += ".pdf";
-                    reportDocument.ExportToDisk(ExportFormatType.PortableDocFormat, tempFilePath);
+                    System.Diagnostics.Debug.WriteLine($"Exporting to PDF: {tempFilePath}");
+                    
+                    // Log all parameters before export for debugging
+                    System.Diagnostics.Debug.WriteLine("=== Pre-Export Parameter Diagnostics ===");
+                    try
+                    {
+                        foreach (ParameterField param in reportDocument.ParameterFields)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Parameter: {param.Name}, HasCurrentValue: {param.HasCurrentValue}");
+                            if (param.HasCurrentValue)
+                            {
+                                try
+                                {
+                                    var currentValues = param.CurrentValues;
+                                    if (currentValues != null && currentValues.Count > 0)
+                                    {
+                                        System.Diagnostics.Debug.WriteLine($"  Value: {currentValues[0]}");
+                                    }
+                                }
+                                catch { }
+                            }
+                        }
+                    }
+                    catch (Exception diagEx)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Parameter diagnostics failed: {diagEx.Message}");
+                    }
+                    System.Diagnostics.Debug.WriteLine("=== End Pre-Export Diagnostics ===");
+                    
+                    try
+                    {
+                        reportDocument.ExportToDisk(ExportFormatType.PortableDocFormat, tempFilePath);
+                    }
+                    catch (Exception exportEx)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"ExportToDisk failed: {exportEx.Message}");
+                        System.Diagnostics.Debug.WriteLine($"Export exception type: {exportEx.GetType().Name}");
+                        System.Diagnostics.Debug.WriteLine($"HResult: 0x{exportEx.HResult:X8}");
+                        System.Diagnostics.Debug.WriteLine($"Temp file path: {tempFilePath}");
+                        System.Diagnostics.Debug.WriteLine($"Temp file path length: {tempFilePath.Length}");
+                        
+                        // Try alternative temp location in app folder
+                        string appTempDir = HttpContext.Current.Server.MapPath("~/App_Data/Temp");
+                        if (!Directory.Exists(appTempDir))
+                        {
+                            Directory.CreateDirectory(appTempDir);
+                        }
+                        
+                        tempFilePath = Path.Combine(appTempDir, Guid.NewGuid().ToString() + ".pdf");
+                        System.Diagnostics.Debug.WriteLine($"Retrying with alternative path: {tempFilePath}");
+                        
+                        try
+                        {
+                            reportDocument.ExportToDisk(ExportFormatType.PortableDocFormat, tempFilePath);
+                            System.Diagnostics.Debug.WriteLine("Export successful with alternative path");
+                        }
+                        catch (Exception retryEx)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Retry also failed: {retryEx.Message}");
+                            throw new InvalidOperationException(
+                                $"Failed to export report to disk. Original error: {exportEx.Message}. " +
+                                $"Retry error: {retryEx.Message}. Temp paths tried: {Path.GetTempPath()} and {appTempDir}", 
+                                exportEx);
+                        }
+                    }
+                    
                     contentType = "application/pdf";
                     fileExtension = ".pdf";
                 }
@@ -413,6 +592,10 @@ namespace CrystalReportsAPI.Controllers
 
                 return Path.Combine(reportsFolder, "LabRadiology", reportFileName);
             }
+            else if (request.ReportName == "OutPatient")
+            {
+                return Path.Combine(reportsFolder, "Patients", "rptOutpatientDetails.rpt");
+            }
             else
             {
                 string sanitizedReportName = Path.GetFileNameWithoutExtension(request.ReportName);
@@ -430,6 +613,10 @@ namespace CrystalReportsAPI.Controllers
             if (request.ReportName == "TestResultQ")
             {
                 ApplyTestResultQParameters(reportDocument, request);
+            }
+            else if (request.ReportName == "OutPatient")
+            {
+                ApplyOutPatientParameters(reportDocument, request);
             }
             else
             {
@@ -460,8 +647,12 @@ namespace CrystalReportsAPI.Controllers
             
             if (!string.IsNullOrEmpty(request.TestIDs))
             {
-                System.Diagnostics.Debug.WriteLine($"Setting @Test_IDs: {request.TestIDs}");
-                reportDocument.SetParameterValue("@Test_IDs", request.TestIDs);
+                // Remove spaces after commas if present - Crystal Reports might be sensitive to this
+                string cleanedTestIDs = request.TestIDs.Replace(", ", ",");
+                System.Diagnostics.Debug.WriteLine($"Original TestIDs: '{request.TestIDs}'");
+                System.Diagnostics.Debug.WriteLine($"Cleaned TestIDs: '{cleanedTestIDs}'");
+                System.Diagnostics.Debug.WriteLine($"Setting @Test_IDs: {cleanedTestIDs}");
+                reportDocument.SetParameterValue("@Test_IDs", cleanedTestIDs);
             }
 
             string testWiseIds = string.Empty;
@@ -539,6 +730,152 @@ namespace CrystalReportsAPI.Controllers
             System.Diagnostics.Debug.WriteLine("=== Parameter setting complete ===");
         }
 
+        private void ApplyOutPatientParameters(ReportDocument reportDocument, ReportRequest request)
+        {
+            System.Diagnostics.Debug.WriteLine($"=== Setting OutPatient Report Parameters ===");
+
+            // Get outPatientID from Parameters collection
+            string outPatientID = string.Empty;
+            if (request.Parameters != null)
+            {
+                System.Diagnostics.Debug.WriteLine($"Parameters count: {request.Parameters.Count}");
+                var outPatientParam = request.Parameters.Find(p => p.Name == "outPatientID");
+                if (outPatientParam != null && outPatientParam.Value != null)
+                {
+                    outPatientID = outPatientParam.Value.ToString();
+                    System.Diagnostics.Debug.WriteLine($"Found outPatientID: {outPatientID}");
+                }
+            }
+
+            if (string.IsNullOrEmpty(outPatientID))
+            {
+                throw new ArgumentException("outPatientID parameter is required for OutPatient report");
+            }
+
+            int outPatientIdInt;
+            if (!int.TryParse(outPatientID, out outPatientIdInt))
+            {
+                throw new ArgumentException($"outPatientID must be a valid integer: {outPatientID}");
+            }
+
+            // Get company information (matching working code pattern)
+            string companyName = ConfigurationManager.AppSettings["CompanyName"] ?? "Hospital Name";
+            string logoPath = GetCompanyLogoPath();
+            
+            System.Diagnostics.Debug.WriteLine($"out_Patient_ID: {outPatientIdInt}");
+            System.Diagnostics.Debug.WriteLine($"CompanyName: '{companyName}'");
+            System.Diagnostics.Debug.WriteLine($"logoPath: '{logoPath}'");
+
+            // Set parameters EXACTLY like working code - no DB connection changes in between
+            System.Diagnostics.Debug.WriteLine("Setting @outPatient for main report");
+            reportDocument.SetParameterValue("@outPatient", outPatientIdInt);
+            
+            System.Diagnostics.Debug.WriteLine("Setting CompanyName");
+            reportDocument.SetParameterValue("CompanyName", companyName);
+            
+            System.Diagnostics.Debug.WriteLine("Setting CompanyLogo");
+            reportDocument.SetParameterValue("CompanyLogo", logoPath);
+            
+            System.Diagnostics.Debug.WriteLine($"Setting @outPatient for subreport[0]: {reportDocument.Subreports[0].Name}");
+            reportDocument.SetParameterValue("@outPatient", outPatientIdInt, reportDocument.Subreports[0].Name);
+            
+            System.Diagnostics.Debug.WriteLine($"Setting @outPatient for subreport[1]: {reportDocument.Subreports[1].Name}");
+            reportDocument.SetParameterValue("@outPatient", outPatientIdInt, reportDocument.Subreports[1].Name);
+            
+            System.Diagnostics.Debug.WriteLine($"Setting @outPatient for subreport[2]: {reportDocument.Subreports[2].Name}");
+            reportDocument.SetParameterValue("@outPatient", outPatientIdInt, reportDocument.Subreports[2].Name);
+            
+            System.Diagnostics.Debug.WriteLine($"Setting @outPatient for subreport[3]: {reportDocument.Subreports[3].Name}");
+            reportDocument.SetParameterValue("@outPatient", outPatientIdInt, reportDocument.Subreports[3].Name);
+
+            System.Diagnostics.Debug.WriteLine("=== OutPatient parameter setting complete ===");
+        }
+
+        private string GetCompanyLogoPath()
+        {
+            try
+            {
+                string logoPath = ConfigurationManager.AppSettings["CompanyLogoPath"];
+                if (!string.IsNullOrEmpty(logoPath))
+                {
+                    // Convert to absolute path if it's a virtual path
+                    if (logoPath.StartsWith("~/"))
+                    {
+                        logoPath = HttpContext.Current.Server.MapPath(logoPath);
+                    }
+                    
+                    // Verify the file exists before returning
+                    if (File.Exists(logoPath))
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Logo file found at: {logoPath}");
+                        return logoPath;
+                    }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Logo file not found at: {logoPath}");
+                    }
+                }
+
+                // Try to get from database if AppSettings doesn't have it
+                string connectionString = ConfigurationManager.ConnectionStrings[ConnectionStringName]?.ConnectionString;
+                if (!string.IsNullOrEmpty(connectionString))
+                {
+                    using (var connection = new System.Data.SqlClient.SqlConnection(connectionString))
+                    {
+                        connection.Open();
+                        using (var command = new System.Data.SqlClient.SqlCommand("SELECT dbo.GetCompanyLogo()", connection))
+                        {
+                            command.CommandTimeout = 30;
+                            var result = command.ExecuteScalar();
+                            if (result != null && result != DBNull.Value)
+                            {
+                                string dbLogoPath = result.ToString();
+                                System.Diagnostics.Debug.WriteLine($"Logo path from database: {dbLogoPath}");
+                                
+                                // Check if it's an absolute path that exists
+                                if (File.Exists(dbLogoPath))
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"Database logo file exists: {dbLogoPath}");
+                                    return dbLogoPath;
+                                }
+                                else
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"Database logo file NOT found: {dbLogoPath}");
+                                    
+                                    // Try to convert to relative path from app root
+                                    try
+                                    {
+                                        string appRoot = HttpContext.Current.Server.MapPath("~/");
+                                        if (dbLogoPath.StartsWith(appRoot, StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            string relativePath = "~/" + dbLogoPath.Substring(appRoot.Length).Replace("\\", "/");
+                                            string mappedPath = HttpContext.Current.Server.MapPath(relativePath);
+                                            if (File.Exists(mappedPath))
+                                            {
+                                                System.Diagnostics.Debug.WriteLine($"Logo found at mapped path: {mappedPath}");
+                                                return mappedPath;
+                                            }
+                                        }
+                                    }
+                                    catch (Exception mapEx)
+                                    {
+                                        System.Diagnostics.Debug.WriteLine($"Error mapping logo path: {mapEx.Message}");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to get company logo path: {ex.Message}");
+            }
+
+            System.Diagnostics.Debug.WriteLine("No valid logo path found, returning empty string");
+            return string.Empty;
+        }
+
         private void ApplyDatabaseConnection(ReportDocument reportDocument)
         {
             string connectionString = ConfigurationManager.ConnectionStrings[ConnectionStringName]?.ConnectionString;
@@ -563,18 +900,29 @@ namespace CrystalReportsAPI.Controllers
                 connectionInfo.Password = builder.Password;
             }
 
+            System.Diagnostics.Debug.WriteLine($"=== Applying Database Connection ===");
+            System.Diagnostics.Debug.WriteLine($"Server: {connectionInfo.ServerName}");
+            System.Diagnostics.Debug.WriteLine($"Database: {connectionInfo.DatabaseName}");
+            System.Diagnostics.Debug.WriteLine($"IntegratedSecurity: {connectionInfo.IntegratedSecurity}");
+            System.Diagnostics.Debug.WriteLine($"Main report tables: {reportDocument.Database.Tables.Count}");
+
             ApplyConnectionToTables(reportDocument.Database.Tables, connectionInfo);
 
+            System.Diagnostics.Debug.WriteLine($"Subreports count: {reportDocument.Subreports.Count}");
             foreach (ReportDocument subreport in reportDocument.Subreports)
             {
+                System.Diagnostics.Debug.WriteLine($"Applying connection to subreport: {subreport.Name} (Tables: {subreport.Database.Tables.Count})");
                 ApplyConnectionToTables(subreport.Database.Tables, connectionInfo);
             }
+            
+            System.Diagnostics.Debug.WriteLine("=== Database connection applied to all reports and subreports ===");
         }
 
         private void ApplyConnectionToTables(Tables tables, ConnectionInfo connectionInfo)
         {
             foreach (Table table in tables)
             {
+                System.Diagnostics.Debug.WriteLine($"  Applying connection to table: {table.Name} (Location: {table.Location})");
                 TableLogOnInfo tableLogOnInfo = table.LogOnInfo;
                 tableLogOnInfo.ConnectionInfo = connectionInfo;
                 table.ApplyLogOnInfo(tableLogOnInfo);
