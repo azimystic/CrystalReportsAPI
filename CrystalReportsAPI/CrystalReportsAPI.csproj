@@ -189,6 +189,8 @@
     <Compile Include="Global.asax.cs">
       <DependentUpon>Global.asax</DependentUpon>
     </Compile>
+    <Compile Include="Helpers\LabTestHelper.cs" />
+    <Compile Include="Models\LabTestInfo.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>
@@ -240,6 +242,7 @@
     <Content Include="Reports\LabRadiology\rptLabTestUiltraSound_1.rpt" />
     <Content Include="README_OutPatient.md" />
     <Content Include="App_Data\Temp\.gitkeep" />
+    <Content Include="README_PatientTests.md" />
     <None Include="Scripts\jquery-3.7.0.intellisense.js" />
     <Content Include="Scripts\jquery-3.7.0.js" />
     <Content Include="Scripts\jquery-3.7.0.min.js" />

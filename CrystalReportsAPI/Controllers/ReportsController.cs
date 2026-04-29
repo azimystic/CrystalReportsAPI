@@ -2,6 +2,7 @@ using CrystalDecisions.CrystalReports.Engine;
 using CrystalDecisions.Shared;
 using CrystalReportsAPI.Filters;
 using CrystalReportsAPI.Models;
+using CrystalReportsAPI.Helpers;
 using System;
 using System.Configuration;
 using System.IO;
@@ -147,6 +148,31 @@ namespace CrystalReportsAPI.Controllers
             
             response.Content = content;
             return response;
+        }
+
+        /// <summary>
+        /// Gets all lab test information for a specific patient
+        /// </summary>
+        [HttpGet]
+        [Route("patient-tests/{patientId}")]
+        [ApiKeyAuthorizationFilter]
+        public IHttpActionResult GetPatientTests(string patientId)
+        {
+            if (string.IsNullOrEmpty(patientId))
+            {
+                return BadRequest("Patient ID is required.");
+            }
+
+            try
+            {
+                var result = LabTestHelper.GetPatientLabTests(patientId);
+                return Ok(result);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error getting patient tests: {ex}");
+                return InternalServerError(ex);
+            }
         }
 
         /// <summary>
