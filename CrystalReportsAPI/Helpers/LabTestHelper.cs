@@ -16,12 +16,14 @@ namespace CrystalReportsAPI.Helpers
         /// </summary>
         /// <param name="patientID">The patient ID</param>
         /// <returns>List of lab test information</returns>
-        public static PatientLabTestsResponse GetPatientLabTests(string patientID)
+        public static PatientLabTestsResponse GetPatientLabTests(string mrNoSequence)
         {
-            var response = new PatientLabTestsResponse
+            if (string.IsNullOrWhiteSpace(mrNoSequence))
             {
-                PatientID = patientID
-            };
+                throw new ArgumentException("MR no sequence is required.");
+            }
+
+            var response = new PatientLabTestsResponse();
 
             string connectionString = ConfigurationManager.ConnectionStrings[ConnectionStringName]?.ConnectionString;
             if (string.IsNullOrEmpty(connectionString))
@@ -33,16 +35,47 @@ namespace CrystalReportsAPI.Helpers
             {
                 connection.Open();
 
+                var patientId = GetPatientIdByMrNoSequence(connection, mrNoSequence);
+                if (string.IsNullOrEmpty(patientId))
+                {
+                    return response;
+                }
+
+                response.PatientID = patientId;
+
                 // Get individual tests (non-group tests)
-                var individualTests = GetIndividualTests(connection, patientID);
+                var individualTests = GetIndividualTests(connection, patientId);
                 response.Tests.AddRange(individualTests);
 
                 // Get group tests
-                var groupTests = GetGroupTests(connection, patientID);
+                var groupTests = GetGroupTests(connection, patientId);
                 response.Tests.AddRange(groupTests);
             }
 
             return response;
+        }
+
+        public static string GetMrNoSequenceByMobile(string mobileNumber)
+        {
+            if (string.IsNullOrWhiteSpace(mobileNumber))
+            {
+                throw new ArgumentException("Mobile number is required.");
+            }
+
+            string connectionString = ConfigurationManager.ConnectionStrings[ConnectionStringName]?.ConnectionString;
+            if (string.IsNullOrEmpty(connectionString))
+            {
+                throw new InvalidOperationException($"Connection string '{ConnectionStringName}' is not configured.");
+            }
+
+            using (var connection = new SqlConnection(connectionString))
+            using (var command = new SqlCommand("SELECT mr_no_sequence FROM Reg_patient WHERE mobile1 = @MobileNumber", connection))
+            {
+                command.Parameters.AddWithValue("@MobileNumber", mobileNumber);
+                connection.Open();
+                var result = command.ExecuteScalar();
+                return result?.ToString() ?? string.Empty;
+            }
         }
 
         private static List<LabTestInfo> GetIndividualTests(SqlConnection connection, string patientID)
@@ -66,6 +99,7 @@ namespace CrystalReportsAPI.Helpers
                 JOIN Ar_Billing_Details bd ON ltd.Bill_Details_ID = bd.Bill_Details_ID
                 WHERE pa.pat_id = @PatientID
                     AND ISNULL(bd.Is_Group_Category, 0) = 0
+                    AND ISNULL(ltd.Is_Result, 0) = 1
                 ORDER BY lt.Lab_Test_ID, ltd.Lab_Test_Detail_ID";
 
             using (var command = new SqlCommand(query, connection))
@@ -121,6 +155,7 @@ namespace CrystalReportsAPI.Helpers
                 LEFT JOIN Datavalues dv ON dv.Datavalue_Name = lt.Group_Category AND dv.ValueSet_ID = 70
                 WHERE ISNULL(bd.Is_Group_Category, 0) = 1
                     AND pat.Patient_No = @PatientNo
+                    AND ISNULL(ld.Is_Result, 0) = 1
                 GROUP BY ltm.Lab_Test_ID, lt.Group_Category, dv.Segment2, ltm.Parent_Transaction_Type_ID
                 ORDER BY ltm.Lab_Test_ID";
 
@@ -133,7 +168,7 @@ namespace CrystalReportsAPI.Helpers
                     while (reader.Read())
                     {
                         string groupCategory = reader["Group_Category"]?.ToString() ?? "";
-                        
+
                         // Get sub-test IDs for this group
                         string subTestIDs = "";
                         if (!string.IsNullOrEmpty(groupCategory))
@@ -167,6 +202,18 @@ namespace CrystalReportsAPI.Helpers
             }
 
             return tests;
+        }
+
+        private static string GetPatientIdByMrNoSequence(SqlConnection connection, string mrNoSequence)
+        {
+            string query = "SELECT pat_id FROM Reg_patient WHERE mr_no_sequence = @MrNoSequence";
+
+            using (var command = new SqlCommand(query, connection))
+            {
+                command.Parameters.AddWithValue("@MrNoSequence", mrNoSequence);
+                var result = command.ExecuteScalar();
+                return result?.ToString() ?? "";
+            }
         }
 
         private static string GetPatientNumber(SqlConnection connection, string patientID)

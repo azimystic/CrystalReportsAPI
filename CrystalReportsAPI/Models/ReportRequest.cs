@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 
 namespace CrystalReportsAPI.Models
@@ -16,7 +15,7 @@ namespace CrystalReportsAPI.Models
 
         public string PatientID { get; set; }
 
-        public string TransID { get; set; }
+        public string LabTestID { get; set; }
 
         public string BillDetailID { get; set; }
 
@@ -26,11 +25,8 @@ namespace CrystalReportsAPI.Models
 
         public bool ExportToExcel { get; set; } = false;
 
-        public List<ReportParameter> Parameters { get; set; }
-
         public ReportRequest()
         {
-            Parameters = new List<ReportParameter>();
         }
     }
 }

@@ -160,7 +160,7 @@ namespace CrystalReportsAPI.Controllers
         {
             if (string.IsNullOrEmpty(patientId))
             {
-                return BadRequest("Patient ID is required.");
+                return BadRequest("MR no sequence is required.");
             }
 
             try
@@ -171,6 +171,31 @@ namespace CrystalReportsAPI.Controllers
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error getting patient tests: {ex}");
+                return InternalServerError(ex);
+            }
+        }
+
+        /// <summary>
+        /// Gets MR no sequence for a patient by mobile number
+        /// </summary>
+        [HttpGet]
+        [Route("patient-mrno")]
+        [ApiKeyAuthorizationFilter]
+        public IHttpActionResult GetMrNoSequenceByMobile([FromUri] string phoneNumber)
+        {
+            if (string.IsNullOrWhiteSpace(phoneNumber))
+            {
+                return BadRequest("Phone number is required.");
+            }
+
+            try
+            {
+                var mrNoSequence = LabTestHelper.GetMrNoSequenceByMobile(phoneNumber);
+                return Ok(new { mr_no_sequence = mrNoSequence });
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error getting MR no sequence by mobile: {ex}");
                 return InternalServerError(ex);
             }
         }
@@ -235,6 +260,7 @@ namespace CrystalReportsAPI.Controllers
                 // Apply database connection AFTER setting parameters
                 ApplyDatabaseConnection(reportDocument);
                 System.Diagnostics.Debug.WriteLine("Database connection applied");
+
                 
                 // Log report sections and objects for resource debugging
                 System.Diagnostics.Debug.WriteLine("=== Report Structure Diagnostics ===");
@@ -259,6 +285,7 @@ namespace CrystalReportsAPI.Controllers
                     System.Diagnostics.Debug.WriteLine($"Structure diagnostics failed: {structEx.Message}");
                 }
                 System.Diagnostics.Debug.WriteLine("=== End Report Structure Diagnostics ===");
+
                 
                 // For OutPatient report, re-apply CompanyName and CompanyLogo after database connection
                 // because ApplyDatabaseConnection can refresh the report and clear some parameters
@@ -290,20 +317,22 @@ namespace CrystalReportsAPI.Controllers
                     // Log the final record selection formula after all parameters are set
                     System.Diagnostics.Debug.WriteLine($"=== Final Report State ===");
                     System.Diagnostics.Debug.WriteLine($"RecordSelectionFormula: {reportDocument.RecordSelectionFormula}");
-                    var outPatientParam = request.Parameters.FirstOrDefault(p => p.Name == "outPatientID");
-                    // Try to log parameter field values
-                    try
+                    if (!string.IsNullOrEmpty(request.PatientID))
                     {
-                        int outPatientID = Convert.ToInt32(outPatientParam.Value);
-                        reportDocument.SetParameterValue("@outPatient", Convert.ToInt32(outPatientID));
-                        reportDocument.SetParameterValue("@outPatient", Convert.ToInt32(outPatientID), reportDocument.Subreports[0].Name.ToString());
-                        reportDocument.SetParameterValue("@outPatient", Convert.ToInt32(outPatientID), reportDocument.Subreports[1].Name.ToString());
-                        reportDocument.SetParameterValue("@outPatient", Convert.ToInt32(outPatientID), reportDocument.Subreports[2].Name.ToString());
-                        reportDocument.SetParameterValue("@outPatient", Convert.ToInt32(outPatientID), reportDocument.Subreports[3].Name.ToString());
-                    }
-                    catch (Exception paramEx)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Could not enumerate parameters: {paramEx.Message}");
+                        // Try to log parameter field values
+                        try
+                        {
+                            int outPatientID = Convert.ToInt32(request.PatientID);
+                            reportDocument.SetParameterValue("@outPatient", Convert.ToInt32(outPatientID));
+                            reportDocument.SetParameterValue("@outPatient", Convert.ToInt32(outPatientID), reportDocument.Subreports[0].Name.ToString());
+                            reportDocument.SetParameterValue("@outPatient", Convert.ToInt32(outPatientID), reportDocument.Subreports[1].Name.ToString());
+                            reportDocument.SetParameterValue("@outPatient", Convert.ToInt32(outPatientID), reportDocument.Subreports[2].Name.ToString());
+                            reportDocument.SetParameterValue("@outPatient", Convert.ToInt32(outPatientID), reportDocument.Subreports[3].Name.ToString());
+                        }
+                        catch (Exception paramEx)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Could not set outPatient parameters: {paramEx.Message}");
+                        }
                     }
                 }
                 
@@ -316,133 +345,96 @@ namespace CrystalReportsAPI.Controllers
                 byte[] exportBytes;
                 string contentType;
                 string fileExtension;
-                
-                // Ensure temp directory exists and create valid temp file path
-                string tempDir = Path.GetTempPath();
-                if (!Directory.Exists(tempDir))
-                {
-                    throw new InvalidOperationException($"Temp directory does not exist: {tempDir}");
-                }
-                
-                tempFilePath = Path.Combine(tempDir, Guid.NewGuid().ToString());
-                System.Diagnostics.Debug.WriteLine($"Temp directory: {tempDir}");
-                System.Diagnostics.Debug.WriteLine($"Temp file path (without extension): {tempFilePath}");
+                ExportFormatType exportFormat;
 
                 if (request.ExportToExcel)
                 {
-                    tempFilePath += ".xls";
-                    System.Diagnostics.Debug.WriteLine($"Exporting to Excel: {tempFilePath}");
-                    
-                    try
-                    {
-                        reportDocument.ExportToDisk(ExportFormatType.Excel, tempFilePath);
-                    }
-                    catch (Exception exportEx)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"ExportToDisk (Excel) failed: {exportEx.Message}");
-                        
-                        // Try alternative temp location in app folder
-                        string appTempDir = HttpContext.Current.Server.MapPath("~/App_Data/Temp");
-                        if (!Directory.Exists(appTempDir))
-                        {
-                            Directory.CreateDirectory(appTempDir);
-                        }
-                        
-                        tempFilePath = Path.Combine(appTempDir, Guid.NewGuid().ToString() + ".xls");
-                        System.Diagnostics.Debug.WriteLine($"Retrying Excel export with alternative path: {tempFilePath}");
-                        
-                        try
-                        {
-                            reportDocument.ExportToDisk(ExportFormatType.Excel, tempFilePath);
-                            System.Diagnostics.Debug.WriteLine("Excel export successful with alternative path");
-                        }
-                        catch (Exception retryEx)
-                        {
-                            throw new InvalidOperationException(
-                                $"Failed to export Excel report. Original error: {exportEx.Message}. " +
-                                $"Retry error: {retryEx.Message}", 
-                                exportEx);
-                        }
-                    }
-                    
+                    exportFormat = ExportFormatType.Excel;
                     contentType = "application/vnd.ms-excel";
                     fileExtension = ".xls";
                 }
                 else
                 {
-                    tempFilePath += ".pdf";
-                    System.Diagnostics.Debug.WriteLine($"Exporting to PDF: {tempFilePath}");
-                    
-                    // Log all parameters before export for debugging
-                    System.Diagnostics.Debug.WriteLine("=== Pre-Export Parameter Diagnostics ===");
-                    try
-                    {
-                        foreach (ParameterField param in reportDocument.ParameterFields)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"Parameter: {param.Name}, HasCurrentValue: {param.HasCurrentValue}");
-                            if (param.HasCurrentValue)
-                            {
-                                try
-                                {
-                                    var currentValues = param.CurrentValues;
-                                    if (currentValues != null && currentValues.Count > 0)
-                                    {
-                                        System.Diagnostics.Debug.WriteLine($"  Value: {currentValues[0]}");
-                                    }
-                                }
-                                catch { }
-                            }
-                        }
-                    }
-                    catch (Exception diagEx)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Parameter diagnostics failed: {diagEx.Message}");
-                    }
-                    System.Diagnostics.Debug.WriteLine("=== End Pre-Export Diagnostics ===");
-                    
-                    try
-                    {
-                        reportDocument.ExportToDisk(ExportFormatType.PortableDocFormat, tempFilePath);
-                    }
-                    catch (Exception exportEx)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"ExportToDisk failed: {exportEx.Message}");
-                        System.Diagnostics.Debug.WriteLine($"Export exception type: {exportEx.GetType().Name}");
-                        System.Diagnostics.Debug.WriteLine($"HResult: 0x{exportEx.HResult:X8}");
-                        System.Diagnostics.Debug.WriteLine($"Temp file path: {tempFilePath}");
-                        System.Diagnostics.Debug.WriteLine($"Temp file path length: {tempFilePath.Length}");
-                        
-                        // Try alternative temp location in app folder
-                        string appTempDir = HttpContext.Current.Server.MapPath("~/App_Data/Temp");
-                        if (!Directory.Exists(appTempDir))
-                        {
-                            Directory.CreateDirectory(appTempDir);
-                        }
-                        
-                        tempFilePath = Path.Combine(appTempDir, Guid.NewGuid().ToString() + ".pdf");
-                        System.Diagnostics.Debug.WriteLine($"Retrying with alternative path: {tempFilePath}");
-                        
-                        try
-                        {
-                            reportDocument.ExportToDisk(ExportFormatType.PortableDocFormat, tempFilePath);
-                            System.Diagnostics.Debug.WriteLine("Export successful with alternative path");
-                        }
-                        catch (Exception retryEx)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"Retry also failed: {retryEx.Message}");
-                            throw new InvalidOperationException(
-                                $"Failed to export report to disk. Original error: {exportEx.Message}. " +
-                                $"Retry error: {retryEx.Message}. Temp paths tried: {Path.GetTempPath()} and {appTempDir}", 
-                                exportEx);
-                        }
-                    }
-                    
+                    exportFormat = ExportFormatType.PortableDocFormat;
                     contentType = "application/pdf";
                     fileExtension = ".pdf";
                 }
+
+                System.Diagnostics.Debug.WriteLine($"Exporting to {exportFormat}");
+
+                string appTempDir = HttpContext.Current.Server.MapPath("~/App_Data/Temp");
+                if (!Directory.Exists(appTempDir))
+                {
+                    Directory.CreateDirectory(appTempDir);
+                }
+
+                Environment.SetEnvironmentVariable("TEMP", appTempDir, EnvironmentVariableTarget.Process);
+                Environment.SetEnvironmentVariable("TMP", appTempDir, EnvironmentVariableTarget.Process);
+                System.Diagnostics.Debug.WriteLine($"Process temp directory set to: {appTempDir}");
+                System.Diagnostics.Debug.WriteLine($"TEMP env: {Environment.GetEnvironmentVariable("TEMP")}");
+                System.Diagnostics.Debug.WriteLine($"TMP env: {Environment.GetEnvironmentVariable("TMP")}");
+
+                try
+                {
+                    var testFile = Path.Combine(appTempDir, $"cr_{Guid.NewGuid():N}.tmp");
+                    File.WriteAllText(testFile, "test");
+                    File.Delete(testFile);
+                    System.Diagnostics.Debug.WriteLine("Temp directory write test succeeded.");
+                }
+                catch (Exception tempEx)
+                {
+                    throw new InvalidOperationException($"Temp directory is not writable: {appTempDir}. {tempEx.Message}", tempEx);
+                }
                 
-                System.Diagnostics.Debug.WriteLine($"File exported to: {tempFilePath}");
-                System.Diagnostics.Debug.WriteLine($"File exists: {File.Exists(tempFilePath)}");
+                // Log all parameters before export for debugging
+                System.Diagnostics.Debug.WriteLine("=== Pre-Export Parameter Diagnostics ===");
+                try
+                {
+                    foreach (ParameterField param in reportDocument.ParameterFields)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Parameter: {param.Name}, HasCurrentValue: {param.HasCurrentValue}");
+                        if (param.HasCurrentValue)
+                        {
+                            try
+                            {
+                                var currentValues = param.CurrentValues;
+                                if (currentValues != null && currentValues.Count > 0)
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"  Value: {currentValues[0]}");
+                                }
+                            }
+                            catch { }
+                        }
+                    }
+                }
+                catch (Exception diagEx)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Parameter diagnostics failed: {diagEx.Message}");
+                }
+                System.Diagnostics.Debug.WriteLine("=== End Pre-Export Diagnostics ===");
+
+                try
+                {
+                    using (var exportStream = reportDocument.ExportToStream(exportFormat))
+                    {
+                        if (exportStream == null)
+                        {
+                            throw new InvalidOperationException("Export stream was null.");
+                        }
+
+                        using (var memoryStream = new MemoryStream())
+                        {
+                            exportStream.CopyTo(memoryStream);
+                            exportBytes = memoryStream.ToArray();
+                        }
+                    }
+                }
+                catch (Exception exportEx)
+                {
+                    throw new InvalidOperationException(
+                        $"Failed to export report to stream. Error: {exportEx.Message}",
+                        exportEx);
+                }
                 
                 // Close report document to release locks
                 if (reportDocument != null)
@@ -452,34 +444,12 @@ namespace CrystalReportsAPI.Controllers
                     reportDocument = null;
                 }
                 
-                // Read the file - ensure it exists and has content
-                if (!File.Exists(tempFilePath))
+                if (exportBytes == null || exportBytes.Length == 0)
                 {
-                    throw new FileNotFoundException($"Exported file not found: {tempFilePath}");
+                    throw new InvalidOperationException("Exported report is empty (0 bytes)");
                 }
-                
-                var fileInfo = new FileInfo(tempFilePath);
-                System.Diagnostics.Debug.WriteLine($"File size: {fileInfo.Length} bytes");
-                
-                if (fileInfo.Length == 0)
-                {
-                    throw new InvalidOperationException("Exported file is empty (0 bytes)");
-                }
-                
-                exportBytes = File.ReadAllBytes(tempFilePath);
+
                 System.Diagnostics.Debug.WriteLine($"Bytes read into memory: {exportBytes.Length}");
-                
-                // Delete temp file NOW, before creating response
-                try
-                {
-                    File.Delete(tempFilePath);
-                    System.Diagnostics.Debug.WriteLine($"Temp file deleted: {tempFilePath}");
-                    tempFilePath = string.Empty; // Clear so finally block doesn't try again
-                }
-                catch (Exception delEx)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Warning: Could not delete temp file: {delEx.Message}");
-                }
 
                 // Create the response with bytes already in memory
                 System.Diagnostics.Debug.WriteLine($"Creating response with {exportBytes.Length} bytes");
@@ -646,23 +616,7 @@ namespace CrystalReportsAPI.Controllers
             }
             else
             {
-                if (request.Parameters != null && request.Parameters.Count > 0)
-                {
-                    foreach (var param in request.Parameters)
-                    {
-                        if (!string.IsNullOrEmpty(param.Name))
-                        {
-                            try
-                            {
-                                reportDocument.SetParameterValue(param.Name, param.Value ?? "");
-                            }
-                            catch (Exception ex)
-                            {
-                                System.Diagnostics.Debug.WriteLine($"Failed to set parameter '{param.Name}': {ex.Message}");
-                            }
-                        }
-                    }
-                }
+                System.Diagnostics.Debug.WriteLine("No generic parameters supplied.");
             }
         }
 
@@ -681,24 +635,7 @@ namespace CrystalReportsAPI.Controllers
                 reportDocument.SetParameterValue("@Test_IDs", cleanedTestIDs);
             }
 
-            string testWiseIds = string.Empty;
-            if (request.Parameters != null)
-            {
-                System.Diagnostics.Debug.WriteLine($"Parameters count: {request.Parameters.Count}");
-                var testWiseIdsParam = request.Parameters.Find(p => p.Name == "test_wise_ids");
-                if (testWiseIdsParam != null && testWiseIdsParam.Value != null)
-                {
-                    testWiseIds = testWiseIdsParam.Value.ToString();
-                    System.Diagnostics.Debug.WriteLine($"Found test_wise_ids: {testWiseIds}");
-                }
-            }
-            
-            if (!string.IsNullOrEmpty(testWiseIds))
-            {
-                System.Diagnostics.Debug.WriteLine($"Setting @Patient_ID from test_wise_ids: {testWiseIds}");
-                reportDocument.SetParameterValue("@Patient_ID", testWiseIds);
-            }
-            else if (!string.IsNullOrEmpty(request.PatientID))
+            if (!string.IsNullOrEmpty(request.PatientID))
             {
                 System.Diagnostics.Debug.WriteLine($"Setting @Patient_ID from PatientID: {request.PatientID}");
                 reportDocument.SetParameterValue("@Patient_ID", request.PatientID);
@@ -708,10 +645,10 @@ namespace CrystalReportsAPI.Controllers
                 System.Diagnostics.Debug.WriteLine("WARNING: @Patient_ID not set - no value provided");
             }
 
-            if (!string.IsNullOrEmpty(request.TransID))
+            if (!string.IsNullOrEmpty(request.LabTestID))
             {
-                System.Diagnostics.Debug.WriteLine($"Setting @Trans_IDs: {request.TransID}");
-                reportDocument.SetParameterValue("@Trans_IDs", request.TransID);
+                System.Diagnostics.Debug.WriteLine($"Setting @Trans_IDs from LabTestID: {request.LabTestID}");
+                reportDocument.SetParameterValue("@Trans_IDs", request.LabTestID);
             }
 
             if (!string.IsNullOrEmpty(request.BillDetailID))
@@ -760,18 +697,8 @@ namespace CrystalReportsAPI.Controllers
         {
             System.Diagnostics.Debug.WriteLine($"=== Setting OutPatient Report Parameters ===");
 
-            // Get outPatientID from Parameters collection
-            string outPatientID = string.Empty;
-            if (request.Parameters != null)
-            {
-                System.Diagnostics.Debug.WriteLine($"Parameters count: {request.Parameters.Count}");
-                var outPatientParam = request.Parameters.Find(p => p.Name == "outPatientID");
-                if (outPatientParam != null && outPatientParam.Value != null)
-                {
-                    outPatientID = outPatientParam.Value.ToString();
-                    System.Diagnostics.Debug.WriteLine($"Found outPatientID: {outPatientID}");
-                }
-            }
+            // Get outPatientID from PatientID
+            string outPatientID = request.PatientID;
 
             if (string.IsNullOrEmpty(outPatientID))
             {
@@ -816,6 +743,7 @@ namespace CrystalReportsAPI.Controllers
 
             System.Diagnostics.Debug.WriteLine("=== OutPatient parameter setting complete ===");
         }
+
 
         private string GetCompanyLogoPath()
         {
